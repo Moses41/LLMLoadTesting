@@ -1,0 +1,12 @@
+{
+    "endpoint": "https://gemini-flash-amdysasm6q-uc.a.run.app/generate-response",
+    "prompts": [
+      "Hello, how are you?",
+      "What is the capital of France?",
+      "Tell me a joke."
+    ],
+    "run_time": "1m",
+    "users": 8,
+    "spawn_rate": 3
+  }
+  

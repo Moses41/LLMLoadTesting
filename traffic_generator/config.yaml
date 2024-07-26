@@ -1,0 +1,6 @@
+endpoint: https://gemini-flash-amdysasm6q-uc.a.run.app/generate-response
+host: https://gemini-flash-amdysasm6q-uc.a.run.app
+prompts:
+- Hello, how are you?
+- What is the capital of France?
+- Tell me a joke.
