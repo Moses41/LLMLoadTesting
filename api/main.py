@@ -30,14 +30,15 @@ async def start_load_test(request: Request):
     }
 
     # Write the config data to config.yaml
-    config_path = os.path.join('..', 'traffic_generator', 'config.yaml')
+    config_path = os.path.join('traffic_generator', 'config.yaml')
     with open(config_path, 'w') as file:
         yaml.dump(config_data, file)
 
     # Start Locust load test using the configuration
     locust_command = [
         "locust",
-        "-f", os.path.join('..', 'traffic_generator', 'traffic_generator.py'),
+        # "-f", os.path.join('..', 'traffic_generator', 'traffic_generator.py'),
+        "-f", os.path.join('traffic_generator', 'traffic_generator.py'),
         "--host", host,
         "--headless",
         "-u", str(users),

@@ -1,5 +1,5 @@
-endpoint: https://gemini-flash-amdysasm6q-uc.a.run.app/generate-response
-host: https://gemini-flash-amdysasm6q-uc.a.run.app
+endpoint: http://35.221.38.211/generate-response
+host: http://35.221.38.211
 prompts:
 - Hello, how are you?
 - What is the capital of France?
