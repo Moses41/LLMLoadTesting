@@ -17,6 +17,10 @@ with open(config_path, 'r') as file:
 
 endpoint = config['endpoint']
 prompts = config['prompts']
+host = config['host']
+users = config['users']
+spawn_rate = config['spawn_rate']
+run_time = config['run_time']
 
 # Initialize MetricCollector
 metric_collector = MetricCollector()
@@ -26,7 +30,7 @@ class UserBehavior(HttpUser):
 
     def on_start(self):
         self.user_id = id(self)
-
+        metric_collector.add_config(users, spawn_rate, endpoint, host, run_time)
     @task
     def send_request(self):
         for prompt in prompts:

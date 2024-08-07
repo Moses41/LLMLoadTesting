@@ -11,7 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire content of the current directory to the container
 COPY . .
 
-ENV CONFIG_PATH="/app/traffic_generator/config.yaml"
 # Expose the port on which the application will run
 EXPOSE 8000
 

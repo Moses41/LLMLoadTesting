@@ -11,9 +11,14 @@ experiments_schema = [
     bigquery.SchemaField("failure_requests", "INTEGER", mode="REQUIRED"),
     bigquery.SchemaField("average_rps", "FLOAT", mode="REQUIRED"),
     bigquery.SchemaField("average_response_time", "FLOAT", mode="REQUIRED"),
+    bigquery.SchemaField("users", "INTEGER", mode="REQUIRED"),
+    bigquery.SchemaField("spawn_rate", "INTEGER", mode="REQUIRED"),
+    bigquery.SchemaField("run_time", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("host", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("endpoint", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("average_prompt_tokens", "INTEGER", mode="REQUIRED"),
     bigquery.SchemaField("average_response_tokens", "INTEGER", mode="REQUIRED"),
-    bigquery.SchemaField("total_token_count", "INTEGER", mode="REQUIRED")
+    bigquery.SchemaField("total_token_count", "INTEGER", mode="REQUIRED"),
 ]
 
 metrics_schema = [

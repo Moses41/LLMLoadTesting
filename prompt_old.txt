@@ -1,0 +1,378 @@
+My analysis of metric_collector.py is as follows:
+
+I can see the increment_concurrent_requests function being used
+within a loop. In the output I can see and example where I have total requests as 380 and peak concurrent requests is 390.
+I need an understanding on how is this happening.
+
+I've noticed that the start_time and end_time stored in experiment table
+is calculated within the display metrics function which is not relevant to the analysis.
+The start and end time is supposed to be the time interval between the initiaion of the traffic and end of it.
+
+I have noticed the average_prompt_tokens and average_response_tokens have the same value.
+this value is not being calculated anywhere.
+
+----------------------------------------------------------------------------------------------------------------------------
+
+The metric_collector.py looks good to me but I see you've forgotten what traffic_generator.py is used for.
+The application we are developing is a Load Testing Framework for which we are using locust to simulate load.
+traffic_generator.py is being executed using the main.py which is triggerd via the command `    locust_command = [
+        "locust",
+        "-f", os.path.join('..', 'traffic_generator', 'traffic_generator.py'),
+        "--host", host,
+        "--headless",
+        "-u", str(users),
+        "-r", str(spawn_rate),
+        "--run-time", run_time
+    ]
+    subprocess.Popen(locust_command)`.
+
+The existing traffic_generator.py is:`
+import os
+import yaml
+import requests
+import time
+import sys
+from locust import HttpUser, task, between, events
+from locust.main import main as locust_main
+
+# Ensure the metric_collector module can be found
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from metric_collector.metric_collector import MetricCollector
+
+# Load configuration
+config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+with open(config_path, 'r') as file:
+    config = yaml.safe_load(file)
+
+endpoint = config['endpoint']
+prompts = config['prompts']
+
+# Initialize MetricCollector
+metric_collector = MetricCollector()
+
+class UserBehavior(HttpUser):
+    wait_time = between(0.5, 2.5)
+
+    def on_start(self):
+        self.user_id = id(self)
+
+    @task
+    def send_request(self):
+        for prompt in prompts:
+            metric_collector.increment_concurrent_requests(self.user_id)
+            start_time = time.time()
+            with self.client.post(endpoint, json={"prompt": prompt}, catch_response=True) as response:
+                response_time = time.time() - start_time
+                if response.status_code == 200:
+                    json_response = response.json()
+                    prompt_token_count = json_response["response"].get("prompt_token_count", 0)
+                    candidates_token_count = json_response["response"].get("candidates_token_count", 0)
+                    total_token_count = json_response["response"].get("total_token_count", 0)
+                    metric_collector.add_metric(self.user_id, prompt, response.status_code, response_time, prompt_token_count, candidates_token_count, total_token_count)
+                    print(f"User: {self.user_id}, Prompt: {prompt}, Status Code: {response.status_code}, Response Time: {response_time:.4f} seconds, Tokens: {total_token_count}")
+                else:
+                    metric_collector.add_metric(self.user_id, prompt, response.status_code, response_time, 0, 0, 0)
+                    print(f"User: {self.user_id}, Prompt: {prompt}, Status Code: {response.status_code}, Response Time: {response_time:.4f} seconds")
+
+    @events.test_stop.add_listener
+    def on_test_stop(environment, **kwargs):
+        metric_collector.display_metrics()
+
+if __name__ == "__main__":
+    locust_main()
+`.
+I have noticed the use of the yaml file in the current traffic_generator.py which I feel can cause issues while scaling the application, so replace it with the instance of metric_collector
+and capture the data that was being stored in yaml.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+The solution is still not scalable. If concurrent experiments are executed then storing the enpoint and other data in the environment variable is not fesiable.
+Lets go step by step. First lets incorporate the changes needed for storing the request data on the the metric_collector instance.
+This way the request will be captured for each experiment.
+Next find a way to pass the metric_collector instance from main.py to traffic_generator.py when executing the locust command but it should be scalable.
+Then make sure locust is being used appropriately for executing concurrent requests along with the right instance of metric_collector.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Things are getting complicated. You have forgotten your changes for metric_collector.py.
+Your current metric_collector.py is: `import uuid
+from tabulate import tabulate
+from collections import defaultdict
+import threading
+import time
+from google.cloud import bigquery
+from google.oauth2 import service_account
+
+class MetricCollector:
+    def __init__(self):
+        self.metrics = defaultdict(list)  # Metrics per user
+        self.failures = defaultdict(list)  # Failure metrics per user
+        self.concurrent_requests = 0
+        self.peak_concurrent_requests = 0
+        self.user_concurrent_requests = defaultdict(int)
+        self.lock = threading.Lock()
+        self.start_time = None
+        self.end_time = None
+        self.experiment_id = self.generate_experiment_id()
+
+    def generate_experiment_id(self):
+        return str(uuid.uuid4())
+
+    def add_metric(self, user_id, prompt, status_code, response_time, prompt_token_count, candidates_token_count, total_token_count):
+        metric = {
+            "prompt": prompt,
+            "status_code": status_code,
+            "response_time": response_time,
+            "prompt_token_count": prompt_token_count,
+            "candidates_token_count": candidates_token_count,
+            "total_token_count": total_token_count
+        }
+
+        if status_code == 200:
+            self.metrics[user_id].append(metric)
+        else:
+            self.failures[user_id].append(metric)
+
+    def increment_concurrent_requests(self, user_id):
+        with self.lock:
+            self.concurrent_requests += 1
+            self.user_concurrent_requests[user_id] += 1
+            if self.concurrent_requests > self.peak_concurrent_requests:
+                self.peak_concurrent_requests = self.concurrent_requests
+
+    def decrement_concurrent_requests(self, user_id):
+        with self.lock:
+            self.concurrent_requests -= 1
+            self.user_concurrent_requests[user_id] -= 1
+
+    def display_metrics(self):
+        overall_table = []
+        overall_total_requests = 0
+        overall_total_response_time = 0
+        overall_total_tokens = 0
+        overall_failures = 0
+        overall_prompt_tokens = 0
+        overall_response_tokens = 0
+
+        print("\nUser-wise Metrics:\n")
+        for user_id, user_metrics in self.metrics.items():
+            user_table = []
+            user_total_requests = len(user_metrics) + len(self.failures[user_id])
+            user_total_response_time = sum(metric['response_time'] for metric in user_metrics + self.failures[user_id])
+            user_total_tokens = sum(metric['total_token_count'] for metric in user_metrics)
+            user_total_prompt_tokens = sum(metric['prompt_token_count'] for metric in user_metrics)
+            user_total_response_tokens = sum(metric['candidates_token_count'] for metric in user_metrics)
+            user_failures = len(self.failures[user_id])
+            user_concurrent_requests = self.user_concurrent_requests[user_id]
+
+            for metric in user_metrics + self.failures[user_id]:
+                user_table.append([
+                    metric['prompt'],
+                    metric['status_code'],
+                    metric['response_time'],
+                    metric['prompt_token_count'],
+                    metric['candidates_token_count'],
+                    metric['total_token_count']
+                ])
+
+            headers = ["Prompt", "Status Code", "Response Time (s)", "Prompt Tokens", "Response Tokens", "Total Tokens"]
+            print(f"User ID: {user_id}")
+            print(tabulate(user_table, headers=headers, tablefmt="pretty"))
+
+            avg_response_time = user_total_response_time / user_total_requests if user_total_requests > 0 else 0
+            rps = user_total_requests / user_total_response_time if user_total_response_time > 0 else 0
+
+            print(f"\nUser {user_id} Analysis:")
+            print(f"Total Requests: {user_total_requests}")
+            print(f"Total Response Time: {user_total_response_time:.4f} seconds")
+            print(f"Average Response Time: {avg_response_time:.4f} seconds")
+            print(f"Requests Per Second (RPS): {rps:.4f}")
+            print(f"Total Tokens: {user_total_tokens}")
+            print(f"Average Tokens Per Request: {user_total_tokens / user_total_requests if user_total_requests > 0 else 0:.4f}")
+            print(f"Total Failures: {user_failures}")
+            print(f"Concurrent Requests: {user_concurrent_requests}")
+            print("\n" + "-"*60 + "\n")
+
+            overall_table.extend(user_table)
+            overall_total_requests += user_total_requests
+            overall_total_response_time += user_total_response_time
+            overall_total_tokens += user_total_tokens
+            overall_prompt_tokens += user_total_prompt_tokens
+            overall_response_tokens += user_total_response_tokens
+            overall_failures += user_failures
+
+        overall_avg_response_time = overall_total_response_time / overall_total_requests if overall_total_requests > 0 else 0
+        overall_rps = overall_total_requests / overall_total_response_time if overall_total_response_time > 0 else 0
+
+        print("\nOverall Analysis:")
+        print(f"Total Requests: {overall_total_requests}")
+        print(f"Total Response Time: {overall_total_response_time:.4f} seconds")
+        print(f"Average Response Time: {overall_avg_response_time:.4f} seconds")
+        print(f"Requests Per Second (RPS): {overall_rps:.4f}")
+        print(f"Total Tokens Processed: {overall_total_tokens}")
+        print(f"Average Tokens Per Request: {overall_total_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
+        print(f"Total Failures: {overall_failures}")
+        print(f"Peak Concurrent Requests: {self.peak_concurrent_requests}")
+        print(f"Average Prompt Tokens: {overall_prompt_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
+        print(f"Average Response Tokens: {overall_response_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
+
+    def start_traffic(self):
+        self.start_time = time.time()
+
+    def end_traffic(self):
+        self.end_time = time.time()
+
+    def upload_to_bigquery(self):
+        credentials = service_account.Credentials.from_service_account_file("credentials.json")
+        client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+
+        dataset_id = "loadTesting"
+        experiments_table_id = f"{dataset_id}.experiments"
+        metrics_table_id = f"{dataset_id}.metrics"
+
+        # Prepare experiment data
+        experiment_data = {
+            "experiment_id": self.experiment_id,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "total_requests": overall_total_requests,
+            "success_requests": overall_total_requests - overall_failures,
+            "failure_requests": overall_failures,
+            "average_rps": overall_rps,
+            "average_response_time": overall_avg_response_time,
+            "average_prompt_tokens": overall_prompt_tokens / overall_total_requests if overall_total_requests > 0 else 0,
+            "average_response_tokens": overall_response_tokens / overall_total_requests if overall_total_requests > 0 else 0,
+            "total_token_count": overall_total_tokens
+        }
+
+        # Insert experiment data
+        client.insert_rows_json(experiments_table_id, [experiment_data])
+
+        # Prepare metrics data
+        metrics_data = []
+        for user_id, user_metrics in self.metrics.items():
+            for metric in user_metrics:
+                metrics_data.append({
+                    "experiment_id": self.experiment_id,
+                    "user_id": user_id,
+                    "prompt": metric["prompt"],
+                    "status_code": metric["status_code"],
+                    "response_time": metric["response_time"],
+                    "prompt_token_count": metric["prompt_token_count"],
+                    "candidates_token_count": metric["candidates_token_count"],
+                    "total_token_count": metric["total_token_count"],
+                    "concurrent_requests": self.user_concurrent_requests[user_id]
+                })
+
+        # Insert metrics data
+        client.insert_rows_json(metrics_table_id, metrics_data)
+`.
+Lets forget about scaling for now and just make the current code executable.
+The current traffic_generator.py is : `import os
+import yaml
+import requests
+import time
+import sys
+from locust import HttpUser, task, between, events
+from locust.main import main as locust_main
+
+# Ensure the metric_collector module can be found
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from metric_collector.metric_collector import MetricCollector
+
+# Load configuration
+config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+with open(config_path, 'r') as file:
+    config = yaml.safe_load(file)
+
+endpoint = config['endpoint']
+prompts = config['prompts']
+
+# Initialize MetricCollector
+metric_collector = MetricCollector()
+
+class UserBehavior(HttpUser):
+    wait_time = between(0.5, 2.5)
+
+    def on_start(self):
+        self.user_id = id(self)
+
+    @task
+    def send_request(self):
+        for prompt in prompts:
+            metric_collector.increment_concurrent_requests(self.user_id)
+            start_time = time.time()
+            with self.client.post(endpoint, json={"prompt": prompt}, catch_response=True) as response:
+                response_time = time.time() - start_time
+                if response.status_code == 200:
+                    json_response = response.json()
+                    prompt_token_count = json_response["response"].get("prompt_token_count", 0)
+                    candidates_token_count = json_response["response"].get("candidates_token_count", 0)
+                    total_token_count = json_response["response"].get("total_token_count", 0)
+                    metric_collector.add_metric(self.user_id, prompt, response.status_code, response_time, prompt_token_count, candidates_token_count, total_token_count)
+                    print(f"User: {self.user_id}, Prompt: {prompt}, Status Code: {response.status_code}, Response Time: {response_time:.4f} seconds, Tokens: {total_token_count}")
+                else:
+                    metric_collector.add_metric(self.user_id, prompt, response.status_code, response_time, 0, 0, 0)
+                    print(f"User: {self.user_id}, Prompt: {prompt}, Status Code: {response.status_code}, Response Time: {response_time:.4f} seconds")
+
+    @events.test_stop.add_listener
+    def on_test_stop(environment, **kwargs):
+        metric_collector.display_metrics()
+
+if __name__ == "__main__":
+    locust_main()
+` and the main.py is `import yaml
+from fastapi import FastAPI, Request
+import os
+import subprocess
+from urllib.parse import urlparse
+
+app = FastAPI()
+
+@app.post("/start_load_test")
+async def start_load_test(request: Request):
+    data = await request.json()
+
+    endpoint = data.get("endpoint")
+    prompts = data.get("prompts", [])
+    run_time = data.get("run_time", "60s")
+    users = data.get("users", 10)
+    spawn_rate = data.get("spawn_rate", 10)
+
+    if not endpoint or not prompts:
+        return {"error": "Endpoint and prompts are required."}
+
+    # Extract host from endpoint
+    parsed_url = urlparse(endpoint)
+    host = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+    config_data = {
+        "endpoint": endpoint,
+        "prompts": prompts,
+        "host": host
+    }
+
+    # Write the config data to config.yaml
+    config_path = os.path.join('..', 'traffic_generator', 'config.yaml')
+    with open(config_path, 'w') as file:
+        yaml.dump(config_data, file)
+
+    # Start Locust load test using the configuration
+    locust_command = [
+        "locust",
+        "-f", os.path.join('..', 'traffic_generator', 'traffic_generator.py'),
+        "--host", host,
+        "--headless",
+        "-u", str(users),
+        "-r", str(spawn_rate),
+        "--run-time", run_time
+    ]
+    subprocess.Popen(locust_command)
+
+    return {"message": "Load test started with given parameters."}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+`. Just make the code properly executable for now.

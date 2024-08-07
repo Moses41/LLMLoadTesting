@@ -26,7 +26,10 @@ async def start_load_test(request: Request):
     config_data = {
         "endpoint": endpoint,
         "prompts": prompts,
-        "host": host
+        "host": host,
+        "run_time": run_time,
+        "users": users,
+        "spawn_rate": spawn_rate,
     }
 
     # Write the config data to config.yaml

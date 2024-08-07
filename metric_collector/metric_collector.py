@@ -5,6 +5,10 @@ import threading
 import time
 from google.cloud import bigquery
 from google.oauth2 import service_account
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class MetricCollector:
     def __init__(self):
@@ -17,6 +21,19 @@ class MetricCollector:
         self.start_time = None
         self.end_time = None
         self.experiment_id = self.generate_experiment_id()
+
+        self.users = None
+        self.spawn_rate = None
+        self.endpoint = None
+        self.host = None
+        self.run_time = None
+
+    def add_config(self, users, spawn_rate, endpoint, host, run_time):
+        self.users = users
+        self.spawn_rate = spawn_rate
+        self.endpoint = endpoint
+        self.host = host
+        self.run_time = run_time
 
     def generate_experiment_id(self):
         return str(uuid.uuid4())
@@ -57,7 +74,7 @@ class MetricCollector:
         overall_prompt_tokens = 0
         overall_response_tokens = 0
 
-        print("\nUser-wise Metrics:\n")
+        logging.info("Displaying User-wise Metrics:")
         for user_id, user_metrics in self.metrics.items():
             user_table = []
             user_total_requests = len(user_metrics) + len(self.failures[user_id])
@@ -79,22 +96,22 @@ class MetricCollector:
                 ])
 
             headers = ["Prompt", "Status Code", "Response Time (s)", "Prompt Tokens", "Response Tokens", "Total Tokens"]
-            print(f"User ID: {user_id}")
-            print(tabulate(user_table, headers=headers, tablefmt="pretty"))
+            logging.info(f"User ID: {user_id}")
+            logging.info(f"\n{tabulate(user_table, headers=headers, tablefmt='pretty')}")
 
             avg_response_time = user_total_response_time / user_total_requests if user_total_requests > 0 else 0
             rps = user_total_requests / user_total_response_time if user_total_response_time > 0 else 0
 
-            print(f"\nUser {user_id} Analysis:")
-            print(f"Total Requests: {user_total_requests}")
-            print(f"Total Response Time: {user_total_response_time:.4f} seconds")
-            print(f"Average Response Time: {avg_response_time:.4f} seconds")
-            print(f"Requests Per Second (RPS): {rps:.4f}")
-            print(f"Total Tokens: {user_total_tokens}")
-            print(f"Average Tokens Per Request: {user_total_tokens / user_total_requests if user_total_requests > 0 else 0:.4f}")
-            print(f"Total Failures: {user_failures}")
-            print(f"Concurrent Requests: {user_concurrent_requests}")
-            print("\n" + "-"*60 + "\n")
+            logging.info(f"User {user_id} Analysis:")
+            logging.info(f"Total Requests: {user_total_requests}")
+            logging.info(f"Total Response Time: {user_total_response_time:.4f} seconds")
+            logging.info(f"Average Response Time: {avg_response_time:.4f} seconds")
+            logging.info(f"Requests Per Second (RPS): {rps:.4f}")
+            logging.info(f"Total Tokens: {user_total_tokens}")
+            logging.info(f"Average Tokens Per Request: {user_total_tokens / user_total_requests if user_total_requests > 0 else 0:.4f}")
+            logging.info(f"Total Failures: {user_failures}")
+            logging.info(f"Concurrent Requests: {user_concurrent_requests}")
+            logging.info("-" * 60)
 
             overall_table.extend(user_table)
             overall_total_requests += user_total_requests
@@ -107,17 +124,17 @@ class MetricCollector:
         overall_avg_response_time = overall_total_response_time / overall_total_requests if overall_total_requests > 0 else 0
         overall_rps = overall_total_requests / overall_total_response_time if overall_total_response_time > 0 else 0
 
-        print("\nOverall Analysis:")
-        print(f"Total Requests: {overall_total_requests}")
-        print(f"Total Response Time: {overall_total_response_time:.4f} seconds")
-        print(f"Average Response Time: {overall_avg_response_time:.4f} seconds")
-        print(f"Requests Per Second (RPS): {overall_rps:.4f}")
-        print(f"Total Tokens Processed: {overall_total_tokens}")
-        print(f"Average Tokens Per Request: {overall_total_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
-        print(f"Total Failures: {overall_failures}")
-        print(f"Peak Concurrent Requests: {self.peak_concurrent_requests}")
-        print(f"Average Prompt Tokens: {overall_prompt_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
-        print(f"Average Response Tokens: {overall_response_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
+        logging.info("Overall Analysis:")
+        logging.info(f"Total Requests: {overall_total_requests}")
+        logging.info(f"Total Response Time: {overall_total_response_time:.4f} seconds")
+        logging.info(f"Average Response Time: {overall_avg_response_time:.4f} seconds")
+        logging.info(f"Requests Per Second (RPS): {overall_rps:.4f}")
+        logging.info(f"Total Tokens Processed: {overall_total_tokens}")
+        logging.info(f"Average Tokens Per Request: {overall_total_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
+        logging.info(f"Total Failures: {overall_failures}")
+        logging.info(f"Peak Concurrent Requests: {self.peak_concurrent_requests}")
+        logging.info(f"Average Prompt Tokens: {overall_prompt_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
+        logging.info(f"Average Response Tokens: {overall_response_tokens / overall_total_requests if overall_total_requests > 0 else 0:.4f}")
 
     def start_traffic(self):
         self.start_time = time.time()
@@ -126,9 +143,14 @@ class MetricCollector:
         self.end_time = time.time()
 
     def upload_to_bigquery(self):
-        print("Entered Upload fn")
-        credentials = service_account.Credentials.from_service_account_file("credentials.json")
-        client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+        logging.info("Entered Upload function")
+        logging.info(f'HOST : {self.host}')
+        try:
+            credentials = service_account.Credentials.from_service_account_file("credentials.json")
+            client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+        except Exception as e:
+            logging.error(f"Error loading credentials: {e}")
+            return
 
         dataset_id = "loadTesting"
         experiments_table_id = f"{dataset_id}.experiments"
@@ -154,19 +176,24 @@ class MetricCollector:
             "average_rps": overall_rps,
             "average_response_time": overall_avg_response_time,
             "average_prompt_tokens": round(overall_prompt_tokens / overall_total_requests) if overall_total_requests > 0 else 0,
-            "average_response_tokens": round(overall_response_tokens / overall_total_requests) if overall_total_requests > 0 else 0,            
-            "total_token_count": overall_total_tokens
+            "average_response_tokens": round(overall_response_tokens / overall_total_requests) if overall_total_requests > 0 else 0,
+            "total_token_count": overall_total_tokens,
+            "users": self.users,
+            "spawn_rate": self.spawn_rate,
+            "host": self.host,
+            "endpoint": self.endpoint,
+            "run_time": self.run_time
         }
 
         try:
             # Insert experiment data
             errors = client.insert_rows_json(experiments_table_id, [experiment_data])
             if errors:
-                print(f"Error inserting experiment data: {errors}")
+                logging.error(f"Error inserting experiment data: {errors}")
             else:
-                print("Experiment data inserted successfully.")
+                logging.info("Experiment data inserted successfully.")
         except Exception as e:
-            print(f"Exception occurred while inserting experiment data: {e}")
+            logging.error(f"Exception occurred while inserting experiment data: {e}")
 
         # Prepare metrics data
         metrics_data = []
@@ -184,12 +211,15 @@ class MetricCollector:
                     "concurrent_requests": self.user_concurrent_requests[user_id]
                 })
 
-        try:
-            # Insert metrics data
-            errors = client.insert_rows_json(metrics_table_id, metrics_data)
-            if errors:
-                print(f"Error inserting metrics data: {errors}")
-            else:
-                print("Metrics data inserted successfully.")
-        except Exception as e:
-            print(f"Exception occurred while inserting metrics data: {e}")
+        # Insert metrics data in batches
+        batch_size = 10000  # You can adjust this size as needed
+        for i in range(0, len(metrics_data), batch_size):
+            batch = metrics_data[i:i + batch_size]
+            try:
+                errors = client.insert_rows_json(metrics_table_id, batch)
+                if errors:
+                    logging.error(f"Error inserting metrics data in batch {i // batch_size + 1}: {errors}")
+                else:
+                    logging.info(f"Metrics data batch {i // batch_size + 1} inserted successfully.")
+            except Exception as e:
+                logging.error(f"Exception occurred while inserting metrics data in batch {i // batch_size + 1}: {e}")

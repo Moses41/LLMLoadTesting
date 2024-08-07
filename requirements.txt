@@ -8,3 +8,4 @@ tabulate
 prettytable
 pandas
 google-cloud-bigquery
+redis
