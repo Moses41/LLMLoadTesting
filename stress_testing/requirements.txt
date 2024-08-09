@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+locust
+requests
+pyyaml
+tabulate
+prettytable
+pandas
+google-cloud-bigquery
